@@ -1,0 +1,57 @@
+Task: JointTrainAgent
+
+BasicSettings:
+  ImageSize: [84, 168]
+  ReplayBufferOnGPU: True
+
+Models:
+  WorldModel:
+    InChannels: 64 # Number of stacked frames
+    TransformerMaxLength: 64
+    TransformerHiddenDim: 512
+    TransformerNumLayers: 6
+    TransformerNumHeads: 8
+  Agent:
+    NumLayers: 2
+    HiddenDim: 256
+    Gamma: 0.99
+    Lambda: 0.95
+    EntropyCoef: 0.01
+
+JointTrainAgent:
+  NumEnvs: 1
+  SampleMaxSteps: 10_000_000
+  BufferMaxLength: 10000
+  BufferWarmUp: 1024
+  TrainDynamicsEverySteps: 1
+  TrainAgentEverySteps: 1
+  BatchSize: 16
+  DemonstrationBatchSize: 4
+  BatchLength: 16
+  ImagineBatchSize: 16
+  ImagineDemonstrationBatchSize: 16
+  ImagineContextLength: 16
+  ImagineBatchLength: 16
+  UseDemonstration: false
+  SaveEverySteps: 200_000
+
+
+#   TrainDynamicsEverySteps: 1
+#   TrainAgentEverySteps: 1
+#   UseDemonstration: False
+#   SaveEverySteps: 2500
+
+# Models:
+#   WorldModel:
+#     InChannels: 3
+#     TransformerMaxLength: 64
+#     TransformerHiddenDim: 512
+#     TransformerNumLayers: 2
+#     TransformerNumHeads: 8
+
+#   Agent:
+#     NumLayers: 2
+#     HiddenDim: 512
+#     Gamma: 0.985
+#     Lambda: 0.95
+#     EntropyCoef: 3E-4
