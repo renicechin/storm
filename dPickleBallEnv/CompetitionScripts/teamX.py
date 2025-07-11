@@ -5,6 +5,12 @@ import cv2
 import torch
 from einops import rearrange
 
+import sys
+import os
+
+# Adds the root directory to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from STORM.utils import seed_np_torch, Logger, load_config
 from STORM.replay_buffer import ReplayBuffer
 import STORM.env_wrapper
@@ -25,17 +31,17 @@ class TeamX:
     steps_per_side = 30  # Number of env steps per side of the square
     step = 0
 
-    def __init__(self, frame_stack=1):
+    def __init__(self, frame_stack=64):
         self.frames = deque(maxlen=frame_stack)
 
         conf = load_config("/home/marl/space/renice/STORM/config_files/unity_dp.yaml")
         from STORM import train
         action_dim = 9
-        world_model = train.build_world_model(conf, action_dim)
-        agent = train.build_agent(conf, action_dim)
+        self.world_model = train.build_world_model(conf, action_dim)
+        self.agent = train.build_agent(conf, action_dim)
         root_path = f"/home/marl/space/renice/STORM/ckpt/unity_dp_experiment"
 
-        step = 10000
+        step = 0
         self.world_model.load_state_dict(torch.load(f"{root_path}/world_model_{step}.pth"))
         self.agent.load_state_dict(torch.load(f"{root_path}/agent_{step}.pth"))
 
@@ -55,9 +61,15 @@ class TeamX:
         # image processing
         obs = observation.transpose(1, 2, 0)
         obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # (H, W)
-        self.frames.append(observation)
+        self.frames.append(obs)
 
-        stacked_obs = np.stack(list(self.frames), axis=-1)  # (H, W, stack)
+        if len(self.frames) < self.frames.maxlen:
+            return np.array([0, 2, 0])
+
+        obs_stack = np.stack(list(self.frames), axis=0)  # shape: (64, H, W)
+        obs_tensor = torch.tensor(obs_stack, dtype=torch.float32).unsqueeze(0).cuda() / 255.0  # (1, 64, H, W)
+
+        obs = np.stack(list(self.frames), axis=-1)  # (H, W, stack)
 
         # Use your policy network here
         # model.predict()
@@ -74,9 +86,11 @@ class TeamX:
                     greedy=False
                 )
 
-        self.context_obs.append(rearrange(torch.Tensor(obs).cuda(), "B H W C -> B 1 C H W")/255)
+        # self.context_obs.append(rearrange(torch.Tensor(obs).cuda(), "B H W C -> B 1 C H W")/255)
+        self.context_obs.append(obs_tensor.unsqueeze(1))  # (B, 1, 64, H, W)
         self.context_action.append(action)
 
+        action = int(action.item()) if isinstance(action, torch.Tensor) else int(action)
         # Convert flat index to multidiscrete
         dims = dims = np.array([3, 3, 3], dtype=np.int32)
         md_action = []

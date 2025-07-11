@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import repeat, rearrange
 
-from sub_models.attention_blocks import get_vector_mask
-from sub_models.attention_blocks import PositionalEncoding1D, AttentionBlock, AttentionBlockKVCache
+from STORM.sub_models.attention_blocks import get_vector_mask
+from STORM.sub_models.attention_blocks import PositionalEncoding1D, AttentionBlock, AttentionBlockKVCache
 
 
 class StochasticTransformer(nn.Module):

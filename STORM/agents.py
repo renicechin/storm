@@ -7,8 +7,8 @@ from einops.layers.torch import Rearrange
 import copy
 from torch.cuda.amp import autocast
 
-from sub_models.functions_losses import SymLogTwoHotLoss
-from utils import EMAScalar
+from STORM.sub_models.functions_losses import SymLogTwoHotLoss
+from STORM.utils import EMAScalar
 
 
 def percentile(x, percentage):

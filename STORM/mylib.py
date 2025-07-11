@@ -53,7 +53,7 @@ class FlattenActionWrapper(ActionWrapper):
 
 
 class SharedObsUnityGymWrapper(Env):
-    def __init__(self, unity_env, frame_stack=64, img_size=(168, 84), grayscale=True):
+    def __init__(self, unity_env, frame_stack=16, img_size=(168, 84), grayscale=True):
         self.env = UnityParallelEnv(unity_env)
 
         # left agent 0, right agent 1
@@ -142,19 +142,21 @@ class SharedObsUnityGymWrapper(Env):
             stacked_obs = np.concatenate(list(self.frames), axis=-1)
 
         bonus = 0
-        if np.array_equal(action, np.array([0, 2, 0])):
-            decay_factor = max(0, 1 - self.step_count / 10000)  # Linearly decay to 0 over 1000 steps
-            bonus += 0.5 * decay_factor  # Initial bonus is 0.1
+        # if np.array_equal(action, np.array([0, 2, 0])):
+        #     decay_factor = max(0, 1 - self.step_count / 10000)  # Linearly decay to 0 over 1000 steps
+        #     bonus += 0.5 * decay_factor  # Initial bonus is 0.1
 
-        bonus -= 5*rewards[self.agent_other]
+        # bonus -= 5*rewards[self.agent_other]
 
+        done = False
         if (rewards[self.agent] + rewards[self.agent_other]) > 0:
+            done = True
             print ("Rewards: ", rewards[self.agent] + bonus, rewards[self.agent_other])
             print("Action:", action)
 
         
 
-        return stacked_obs, rewards[self.agent] + bonus, terminations[self.agent], False, infos[self.agent]
+        return stacked_obs, rewards[self.agent] + bonus, done, False, infos[self.agent]
 
     def render(self):
         return self.env.render()

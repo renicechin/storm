@@ -16,7 +16,7 @@ Models:
     HiddenDim: 256
     Gamma: 0.99
     Lambda: 0.95
-    EntropyCoef: 0.01
+    EntropyCoef: 0.005
 
 JointTrainAgent:
   NumEnvs: 1
@@ -32,14 +32,10 @@ JointTrainAgent:
   ImagineDemonstrationBatchSize: 16
   ImagineContextLength: 16
   ImagineBatchLength: 16
-  UseDemonstration: false
+  UseDemonstration: true
   SaveEverySteps: 200_000
 
 
-#   TrainDynamicsEverySteps: 1
-#   TrainAgentEverySteps: 1
-#   UseDemonstration: False
-#   SaveEverySteps: 2500
 
 # Models:
 #   WorldModel:

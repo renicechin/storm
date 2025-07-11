@@ -1,7 +1,6 @@
 from mlagents_envs.environment import UnityEnvironment
 from mlagents_envs.envs.unity_parallel_env import UnityParallelEnv
 import matplotlib.pyplot as plt
-import sys
 import cv2
 from mlagents_envs.envs.custom_side_channel import CustomDataChannel, StringSideChannel
 from uuid import UUID
@@ -20,9 +19,14 @@ channel = CustomDataChannel()
 reward_cum = [0,0]
 channel.send_data(serve=212, p1=reward_cum[0], p2=reward_cum[1])
 
+from xvfbwrapper import Xvfb
+# Start virtual display
+vdisplay = Xvfb(width=1024, height=768)
+vdisplay.start()
+
 print("Hello dPickleBall Trainer")
 
-unity_env = UnityEnvironment("/home/gsk/Desktop/build_linux/dp.x86_64", side_channels=[string_channel, channel])
+unity_env = UnityEnvironment("/home/marl/space/renice/build_linux_V2/dp.x86_64", side_channels=[string_channel, channel])
 # unity_env = UnityEnvironment(None, side_channels=[string_channel, channel])
 print("environment created")
 env = UnityParallelEnv(unity_env)
@@ -75,7 +79,7 @@ def update_policy_async_x(policy_fn, obs, rew):
             with action_x_lock:
                 latest_action_x[:] = result  
         except Exception as e:
-            print(f"[Warning] teamY policy failed later: {e}")
+            print(f"[Warning] teamX policy failed later: {e}")
 
     if policy_thread_x is None or not policy_thread_x.is_alive():
         policy_thread_x = Thread(target=run_policy)
@@ -121,6 +125,7 @@ except KeyboardInterrupt:
     print("Training interrupted")
 finally:
     env.close()  # Important! Ensures Unity is notified and exits cleanly
+    vdisplay.stop()
 
 
     

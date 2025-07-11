@@ -15,7 +15,7 @@ class TeamY:
     steps_per_side = 30  # Number of env steps per side of the square
     step = 0
 
-    def __init__(self, frame_stack=1):
+    def __init__(self, frame_stack=64):
         self.frames = deque(maxlen=frame_stack)
         
     

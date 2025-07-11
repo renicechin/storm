@@ -17,18 +17,18 @@ import shutil
 import pickle
 import os
 
-from utils import seed_np_torch, Logger, load_config
-from replay_buffer import ReplayBuffer
-import env_wrapper
-import agents
-from sub_models.functions_losses import symexp
-from sub_models.world_models import WorldModel, MSELoss
+from STORM.utils import seed_np_torch, Logger, load_config
+from STORM.replay_buffer import ReplayBuffer
+import STORM.env_wrapper as env_wrapper
+import STORM.agents as agents
+from STORM.sub_models.functions_losses import symexp
+from STORM.sub_models.world_models import WorldModel, MSELoss
 
 from mlagents_envs.environment import UnityEnvironment
 from mlagents_envs.envs.unity_parallel_env import UnityParallelEnv
 from mlagents_envs.envs.custom_side_channel import CustomDataChannel, StringSideChannel
 
-from mylib import SharedObsUnityGymWrapper, CustomCNN, FlattenActionWrapper, LimitToMoveOnlyActionWrapper
+from STORM.mylib import SharedObsUnityGymWrapper, CustomCNN, FlattenActionWrapper, LimitToMoveOnlyActionWrapper
 
 SAVE_VIDEO_EVERY_STEPS = 200
 

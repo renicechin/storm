@@ -19,10 +19,10 @@ import os
 
 from utils import seed_np_torch, Logger, load_config
 from replay_buffer import ReplayBuffer
-import env_wrapper
-import agents
-from sub_models.functions_losses import symexp
-from sub_models.world_models import WorldModel, MSELoss
+import STORM.env_wrapper as env_wrapper
+import STORM.agents as agents
+from STORM.sub_models.functions_losses import symexp
+from STORM.sub_models.world_models import WorldModel, MSELoss
 
 
 def process_visualize(img):
