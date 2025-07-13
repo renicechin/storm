@@ -27,12 +27,14 @@ from STORM.sub_models.world_models import WorldModel, MSELoss
 from mlagents_envs.environment import UnityEnvironment
 from mlagents_envs.envs.unity_parallel_env import UnityParallelEnv
 from mlagents_envs.envs.custom_side_channel import CustomDataChannel, StringSideChannel
+from stable_baselines3 import PPO
 
-from STORM.mylib import SharedObsUnityGymWrapper, CustomCNN, FlattenActionWrapper, LimitToMoveOnlyActionWrapper
+from STORM.mylib import SharedObsUnityGymWrapper, CustomCNN, FlattenActionWrapper, LimitToMoveOnlyActionWrapper, FlatToMultiDiscreteWrapper
 
+SAVE_WM_VIDEO_EVERY_STEPS = 200
 SAVE_VIDEO_EVERY_STEPS = 200
 
-def build_single_env(env_name, image_size, seed):
+def build_single_env(env_name, image_size, seed, ppo_agents=None):
     string_channel = StringSideChannel()
     channel = CustomDataChannel()
     #init points
@@ -51,19 +53,42 @@ def build_single_env(env_name, image_size, seed):
     unity_env = UnityEnvironment("/home/marl/space/renice/build_linux_V2/dp.x86_64", side_channels=[string_channel, channel])
 
     print("environment created")
-    env = SharedObsUnityGymWrapper(unity_env)
-    env = LimitToMoveOnlyActionWrapper(env)
+    try:
+        env = SharedObsUnityGymWrapper(unity_env, ppo_agents=ppo_agents)
+    except Exception as e:
+        print("[ERROR] Failed to create SharedObsUnityGymWrapper:", e)
+        import traceback
+        traceback.print_exc()
+        raise
+
+    try: 
+        env = FlatToMultiDiscreteWrapper(env)
+    except Exception as e:
+        print("[ERROR] Failed to create FlatToMultiDiscreteWrapper:", e)
+        import traceback
+        traceback.print_exc()
+        raise
+        
     return env
 
 
-def build_vec_env(env_name, image_size, num_envs, seed):
-    # lambda pitfall refs to: https://python.plainenglish.io/python-pitfalls-with-variable-capture-dcfc113f39b7
-    def lambda_generator(env_name, image_size):
-        return lambda: build_single_env(env_name, image_size, seed)
-    env_fns = []
-    env_fns = [lambda_generator(env_name, image_size) for i in range(num_envs)]
-    vec_env = gymnasium.vector.AsyncVectorEnv(env_fns=env_fns)
-    return vec_env
+# def build_vec_env(env_name, image_size, num_envs, seed):
+#     # lambda pitfall refs to: https://python.plainenglish.io/python-pitfalls-with-variable-capture-dcfc113f39b7
+#     def lambda_generator(env_name, image_size):
+#         return lambda: build_single_env(env_name, image_size, seed)
+#     env_fns = []
+#     env_fns = [lambda_generator(env_name, image_size) for i in range(num_envs)]
+#     vec_env = gymnasium.vector.AsyncVectorEnv(env_fns=env_fns)
+#     return vec_env
+
+def build_vec_env(env_name, image_size, num_envs, seed, ppo_agents=None):
+    def make_env(rank):
+        def _thunk():
+            return build_single_env(env_name, image_size, seed + rank, ppo_agents=ppo_agents)
+        return _thunk
+
+    env_fns = [make_env(i) for i in range(num_envs)]
+    return gymnasium.vector.AsyncVectorEnv(env_fns)
 
 
 def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, demonstration_batch_size, batch_length, logger):
@@ -102,7 +127,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                                   batch_size, demonstration_batch_size, batch_length,
                                   imagine_batch_size, imagine_demonstration_batch_size,
                                   imagine_context_length, imagine_batch_length,
-                                  save_every_steps, seed, logger):
+                                  save_every_steps, seed, logger, ppo_agent=None, ppo_agents=None):
     # create ckpt dir
     os.makedirs(f"ckpt/{args.n}", exist_ok=True)
 
@@ -116,11 +141,11 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
     recording_video = False
     video_frame_count = 0
     video_max_frames = 200
-
+    os.makedirs("videos", exist_ok=True)
 
     # build vec env, not useful in the Atari100k setting
     # but when the max_steps is large, you can use parallel envs to speed up
-    vec_env = build_vec_env(env_name, image_size, num_envs=num_envs, seed=seed)
+    vec_env = build_vec_env(env_name, image_size, num_envs=num_envs, seed=seed, ppo_agents=ppo_agents)
     print("Current env: " + colorama.Fore.YELLOW + f"{env_name}" + colorama.Style.RESET_ALL)
 
     # reset envs and variables
@@ -131,6 +156,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
 
     try:
         # sample and train
+        episode_steps = np.zeros(num_envs, dtype=int)
         for total_steps in tqdm(range(max_steps//num_envs)):
             # sample part >>>
             if replay_buffer.ready():
@@ -151,10 +177,17 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
 
                 context_obs.append(rearrange(torch.Tensor(current_obs).cuda(), "B H W C -> B 1 C H W")/255)
                 context_action.append(action)
+            elif not replay_buffer.ready() and ppo_agent is not None:
+                current_obs_8 = current_obs[..., -8:]
+                ppo_input_obs = np.transpose(current_obs_8, (0, 3, 1, 2))  # Convert [B, H, W, C] -> [B, C, H, W]
+                multidiscrete_action, _ = ppo_agent.predict(ppo_input_obs)
+                action = multidiscrete_action[:, 0] * 9 + multidiscrete_action[:, 1] * 3 + multidiscrete_action[:, 2]
             else:
                 action = vec_env.action_space.sample()
 
             obs, reward, done, truncated, info = vec_env.step(action)
+            episode_steps += 1
+
             if done or truncated:
                 print(f"Current reward: {reward}, done: {done}, truncated: {truncated}")
             replay_buffer.append(current_obs, action, reward, done)
@@ -177,7 +210,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                 for i in range(num_envs):
                     if done_flag[i]:
                         logger.log(f"sample/{env_name}_reward", sum_reward[i])
-                        logger.log(f"sample/{env_name}_episode_steps", current_info["episode_frame_number"][i]//4)  # framskip=4
+                        logger.log(f"sample/{env_name}_episode_steps", episode_steps[i])  # framskip=4
                         logger.log("replay_buffer/length", len(replay_buffer))
                         sum_reward[i] = 0
 
@@ -201,7 +234,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
 
             # train agent part >>>
             if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
-                if total_steps % (save_every_steps//num_envs) == 0:
+                if total_steps % (SAVE_WM_VIDEO_EVERY_STEPS//num_envs) == 0:
                     log_video = True
                 else:
                     log_video = False
@@ -224,6 +257,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                         recording_video = False
                         if video_writer:
                             video_writer.release()
+                            print(f"Video saved to {video_path}")
                             video_writer = None
                 else:
                     record_video = False
@@ -288,7 +322,20 @@ def build_agent(conf, action_dim):
     ).cuda()
 
 
+import multiprocessing as mp
 if __name__ == "__main__":
+    mp.set_start_method("spawn", force=True)
+    ppo_agents = []
+    ppo_agent_path = [r"/home/marl/space/renice/None_20250711-214423.zip"]
+    for path in ppo_agent_path:
+        if os.path.exists(path):
+            print(f"Loading PPO agent from {path}")
+            ppo_agents.append(PPO.load(path))
+        else:
+            print(f"PPO agent path {path} does not exist, skipping loading.")
+            
+    ppo_agent = PPO.load(rf"{ppo_agent_path}")
+
     # ignore warnings
     import warnings
     warnings.filterwarnings('ignore')
@@ -321,7 +368,7 @@ if __name__ == "__main__":
     # distinguish between tasks, other debugging options are removed for simplicity
     if conf.Task == "JointTrainAgent":
         # getting action_dim with dummy env
-        dummy_env = build_single_env(args.env_name, conf.BasicSettings.ImageSize, seed=0)
+        dummy_env = build_single_env(args.env_name, conf.BasicSettings.ImageSize, seed=0, ppo_agent=ppo_agent)
         action_dim = dummy_env.action_space.n
         frame_stack = dummy_env.env.frame_stack
         print("Action dimension: ", action_dim)
@@ -366,7 +413,9 @@ if __name__ == "__main__":
                 imagine_batch_length=conf.JointTrainAgent.ImagineBatchLength,
                 save_every_steps=conf.JointTrainAgent.SaveEverySteps,
                 seed=args.seed,
-                logger=logger
+                logger=logger,
+                ppo_agent=ppo_agent,
+                ppo_agents=ppo_agents
             )
         except KeyboardInterrupt:
             print("Interrupted")

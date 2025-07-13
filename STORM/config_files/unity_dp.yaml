@@ -6,8 +6,8 @@ BasicSettings:
 
 Models:
   WorldModel:
-    InChannels: 64 # Number of stacked frames
-    TransformerMaxLength: 64
+    InChannels: 16 # Number of stacked frames
+    TransformerMaxLength: 96
     TransformerHiddenDim: 512
     TransformerNumLayers: 6
     TransformerNumHeads: 8
@@ -16,24 +16,24 @@ Models:
     HiddenDim: 256
     Gamma: 0.99
     Lambda: 0.95
-    EntropyCoef: 0.005
+    EntropyCoef: 0.1
 
 JointTrainAgent:
   NumEnvs: 1
   SampleMaxSteps: 10_000_000
   BufferMaxLength: 10000
   BufferWarmUp: 1024
-  TrainDynamicsEverySteps: 1
-  TrainAgentEverySteps: 1
+  TrainDynamicsEverySteps: 2
+  TrainAgentEverySteps: 10
   BatchSize: 16
   DemonstrationBatchSize: 4
   BatchLength: 16
   ImagineBatchSize: 16
   ImagineDemonstrationBatchSize: 16
   ImagineContextLength: 16
-  ImagineBatchLength: 16
-  UseDemonstration: true
-  SaveEverySteps: 200_000
+  ImagineBatchLength: 64
+  UseDemonstration: false
+  SaveEverySteps: 50_000
 
 
 
