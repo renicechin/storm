@@ -48,6 +48,7 @@ try:
         action = square_directions[side]
 
         actions = {'PAgent1?team=0?agent_id=0':action,'PAgent2?team=0?agent_id=1':action}
+        
 
         observation, reward, done, info = env.step(actions)
 

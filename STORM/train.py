@@ -47,10 +47,10 @@ def build_single_env(env_name, image_size, seed, ppo_agents=None):
     # The remaining digits (before the last one) indicate the match point.
     # Example: 213 → match point = 21, serve = 3 (random serve)
     # Example: 12 → match point = 1, serve = 2 (right serve)
-    channel.send_data(serve=12, p1=reward_cum[0], p2=reward_cum[1])
+    channel.send_data(serve=53, p1=reward_cum[0], p2=reward_cum[1])
     print("Hello dPickleBall Trainer")
 
-    unity_env = UnityEnvironment("/home/marl/space/renice/build_linux_V2/dp.x86_64", side_channels=[string_channel, channel])
+    unity_env = UnityEnvironment("/home/marl/space/renice/build_linux_V3/dp.x86_64", side_channels=[string_channel, channel])
 
     print("environment created")
     try:
@@ -134,10 +134,11 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
     import cv2
     import datetime
     video_writer = None
+    video_writer2 = None
     record_video = False
     frame_size = (168, 84)
     fps = 30
-
+    info = None
     recording_video = False
     video_frame_count = 0
     video_max_frames = 200
@@ -185,11 +186,11 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
             else:
                 action = vec_env.action_space.sample()
 
+            
             obs, reward, done, truncated, info = vec_env.step(action)
+            unmasked_obs = info.get("unmasked_obs")
             episode_steps += 1
 
-            if done or truncated:
-                print(f"Current reward: {reward}, done: {done}, truncated: {truncated}")
             replay_buffer.append(current_obs, action, reward, done)
 
             if record_video:
@@ -204,6 +205,17 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                 img = np.stack([img] * 3, axis=-1)  # Grayscale to RGB
                 img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 video_writer.write(img_bgr)
+                
+                img2 = unmasked_obs[0, 0, ...]
+                img2 = img2 - img2.min()
+                if img2.max() > 0:
+                    img2 = img2 / img2.max()
+                else:
+                    img2 = np.zeros_like(img2)
+                img2 = (img2 * 255).astype(np.uint8)
+                img2 = np.stack([img2]*3, axis=-1)
+                video_writer2.write(cv2.cvtColor(img2, cv2.COLOR_RGB2BGR))
+                
 
             done_flag = np.logical_or(done, truncated)
             if done_flag.any():
@@ -217,6 +229,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
             # update current_obs, current_info and sum_reward
             sum_reward += reward
             current_obs = obs
+            current_unmasked_obs = unmasked_obs
             current_info = info
             # <<< sample part
 
@@ -240,6 +253,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                     log_video = False
 
                 if total_steps % (SAVE_VIDEO_EVERY_STEPS // num_envs) == 0 and not recording_video:
+                    print(">>>>>>>> Recording video ")
                     # Start recording
                     record_video = True
                     recording_video = True
@@ -248,17 +262,22 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
                     video_path = f"videos/video_step{total_steps}_{timestamp}.mp4"
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     video_writer = cv2.VideoWriter(video_path, fourcc, fps, frame_size)
+                    video_writer2 = cv2.VideoWriter(f"videos/video_step{total_steps}_{timestamp}_actual.mp4", fourcc, fps, frame_size)
+
                 elif recording_video:
                     record_video = True
                     video_frame_count += 1
                     if video_frame_count >= video_max_frames:
                         # Stop recording
+                        print("Stopped Recording <<<<<<<<")
                         record_video = False
                         recording_video = False
                         if video_writer:
                             video_writer.release()
+                            video_writer2.release()
                             print(f"Video saved to {video_path}")
                             video_writer = None
+                            video_writer2 = None
                 else:
                     record_video = False
 
@@ -297,6 +316,7 @@ def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
         vec_env.close()
         if video_writer:
             video_writer.release()
+            video_writer2.release()
 
 
 def build_world_model(conf, action_dim):
@@ -325,16 +345,13 @@ def build_agent(conf, action_dim):
 import multiprocessing as mp
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
-    ppo_agents = []
-    ppo_agent_path = [r"/home/marl/space/renice/None_20250711-214423.zip"]
-    for path in ppo_agent_path:
-        if os.path.exists(path):
-            print(f"Loading PPO agent from {path}")
-            ppo_agents.append(PPO.load(path))
-        else:
-            print(f"PPO agent path {path} does not exist, skipping loading.")
+    ppo_agents = [
+        {"agent": PPO.load(r"/home/marl/space/renice/opponents/pickleball_100000_steps.zip"), "stack": 8, 'name': "zy agent"},
+        {"agent": PPO.load(r"/home/marl/space/renice/opponents/None_20250713-142019.zip"), "stack": 8, "name": "BT agent"},
+        {"agent": PPO.load(r"/home/marl/space/renice/opponents/ppo_sp_640000_steps.zip"), "stack": 4, "name": "ZT agent"},
+    ]
             
-    ppo_agent = PPO.load(rf"{ppo_agent_path}")
+    ppo_agent = PPO.load(r"/home/marl/space/renice/opponents/pickleball_100000_steps.zip")
 
     # ignore warnings
     import warnings
@@ -368,7 +385,7 @@ if __name__ == "__main__":
     # distinguish between tasks, other debugging options are removed for simplicity
     if conf.Task == "JointTrainAgent":
         # getting action_dim with dummy env
-        dummy_env = build_single_env(args.env_name, conf.BasicSettings.ImageSize, seed=0, ppo_agent=ppo_agent)
+        dummy_env = build_single_env(args.env_name, conf.BasicSettings.ImageSize, seed=0, ppo_agents=ppo_agents)
         action_dim = dummy_env.action_space.n
         frame_stack = dummy_env.env.frame_stack
         print("Action dimension: ", action_dim)

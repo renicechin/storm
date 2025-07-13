@@ -79,6 +79,7 @@ class SharedObsUnityGymWrapper(Env):
         self.agent = self.env.possible_agents[1]       # agent to be controlled
         self.agent_other = self.env.possible_agents[0] # agent at opposite
         self.agent_obs = self.env.possible_agents[0]   # obs is only available in agent 0, always 0
+
         self.frame_stack = frame_stack
         self.img_size = img_size
         self.grayscale = grayscale
@@ -96,12 +97,23 @@ class SharedObsUnityGymWrapper(Env):
 
         self.ppo_agents = ppo_agents or []
         self.scripted_opponents = ["square", "dash"]
+        combined = self.ppo_agents + self.scripted_opponents
+        self.opponents = combined if combined else None
 
         self.opponent_policy = None
-        self.last_opponent_switch_step = 0
-        self.total_env_steps = 0
+        self.opponent_type = "attack"
+
+        self.is_serving = True
 
         self._select_opponent()
+
+        # >>> zy's reward parameters
+        self.prev_potential = 0.5
+        self.shaping_lambda = 0.3
+        self.anneal_every = 50_000
+        self.anneal_factor = 0.95
+        # zy's reward parameters <<<
+
 
         # Observation space
         base_obs = self.env.observation_spaces[self.agent_obs][0]
@@ -120,8 +132,7 @@ class SharedObsUnityGymWrapper(Env):
         self.action_space = self.env.action_spaces[self.agent]
 
     def _select_opponent(self):
-        candidates = self.scripted_opponents + self.ppo_agents
-        self.opponent_policy = np.random.choice(candidates)
+        self.opponent_policy = np.random.choice(self.opponents)
 
         print(f"Switched opponent to: {self.opponent_policy}")
 
@@ -155,7 +166,7 @@ class SharedObsUnityGymWrapper(Env):
         # Resize and grayscale
         obs = cv2.resize(final_obs, self.img_size, interpolation=cv2.INTER_AREA)
 
-        if self.model is not None:
+        if self.opponents is not None:
             flipped_obs = cv2.flip(obs, 1)
             return obs, flipped_obs
 
@@ -204,7 +215,7 @@ class SharedObsUnityGymWrapper(Env):
 
         obs_dict = self.env.reset()
 
-        if self.model is not None:
+        if self.opponents is not None:
             obs, flipped_obs = self._preprocess(obs_dict[self.agent_obs]['observation'][0])
             for _ in range(self.frame_stack):
                 self.frames.append(obs)
@@ -214,18 +225,18 @@ class SharedObsUnityGymWrapper(Env):
             for _ in range(self.frame_stack):
                 self.frames.append(obs)
 
-        obs = self._preprocess(obs_dict[self.agent_obs]['observation'][0])
-
         if self.grayscale:
             stacked_obs = np.stack(list(self.frames), axis=-1)  # (H, W, stack)
         else:
             stacked_obs = np.concatenate(list(self.frames), axis=-1)
 
-        return stacked_obs, {}  # (H, W, stack)
 
-    def step(self, action):
-        try:
-            # Agent 0 action
+        unmasked_obs = self._ori_preprocess(obs_dict[self.agent_obs]['observation'][0])
+        return stacked_obs, {"unmasked_obs": unmasked_obs}  # (H, W, stack)
+
+    def step_opponent(self):
+        # Agent 0 action
+        if self.opponent_type == "attack":
             if isinstance(self.opponent_policy, str):  # Scripted opponent
                 if self.opponent_policy == "square":
                     steps_per_side = 30
@@ -243,22 +254,84 @@ class SharedObsUnityGymWrapper(Env):
 
                 else:
                     raise ValueError(f"Unknown scripted opponent: {self.opponent_policy}")
-            else:
-                # PPO agent
-                invert = {
-                    0:0,
-                    1:2,
-                    2:1
-                }
-                other_action, _states = self.opponent_policy.predict(np.stack(list(self.frames2), axis=0))
-                other_action[1] = invert[other_action[1]]
-                other_action[2] = invert[other_action[2]]
+            elif isinstance(self.opponent_policy, dict):  # PPO agent
+                agent = self.opponent_policy["agent"]
+                required_stack = self.opponent_policy["stack"]
                 
+                if len(self.frames2) < required_stack:
+                    other_action = np.array([0, 1, 0], dtype=np.int32)  # fallback
+                else:
+                    # PPO agent
+                    invert = {
+                        0:0,
+                        1:2,
+                        2:1
+                    }
+                    agent = self.opponent_policy["agent"]
+                    required_stack = self.opponent_policy["stack"]
+
+                    frames_np = np.stack(list(self.frames2)[-required_stack:], axis=0)  # [stack, H, W]
+
+                    if required_stack == 4:
+                        target_size = (64, 148)  # (H, W)
+
+                        ppo_input = np.stack([
+                            cv2.resize(f, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA)
+                            for f in frames_np
+                        ], axis=0)  # [stack, 64, 148]
+
+                        other_action, _states = agent.predict(ppo_input)
+                        
+                        other_action[1] = invert[other_action[1]]
+                        other_action = np.append(other_action, 0)
+
+                    else:
+                        ppo_input = frames_np
+
+                        # Run prediction
+                        other_action, _states = agent.predict(ppo_input)
+                        
+                        other_action[1] = invert[other_action[1]]
+                        other_action[2] = invert[other_action[2]]
+            else: 
+                print(f"Unknown opponent policy: {self.opponent_policy}")
+        else:
+            other_action = np.array([0, 0, 0], dtype=np.int32)  
+            other_action[0] = np.random.randint(3)  # random action
+            other_action[2] = np.random.randint(3)  # random action
+
+        return other_action
+                
+    def _ori_preprocess(self, obs):
+        # Transpose from (C, H, W) → (H, W, C)
+        if self._transpose:
+            obs = obs.transpose(1, 2, 0)
+
+        # Resize and grayscale
+        obs = cv2.resize(obs, self.img_size, interpolation=cv2.INTER_AREA)
+
+        if self.grayscale:
+            obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # (H, W)
+            obs = np.expand_dims(obs, axis=0)  # (1, H, W)
+        else:
+            obs = obs.transpose(2, 0, 1)  # (C, H, W)
+
+        obs = obs.astype(np.float32) / 255.0  # Normalize to [0, 1]
+        
+        return obs
+    
+    def step(self, action):
+        try:
+            other_action = self.step_opponent()
 
             actions = {self.agent: action, self.agent_other: other_action}
             obs_dict, rewards, terminations, infos = self.env.step(actions)
+            gamestate = obs_dict[self.agent_obs]['observation'][1]
+            gamestate = int(gamestate[0].item())
 
-            if self.model is not None:
+            self.step_count += 1
+
+            if self.opponents is not None:
                 obs, flipped_obs = self._preprocess(obs_dict[self.agent_obs]['observation'][0])
                 self.frames.append(obs)
                 self.frames2.append(flipped_obs)
@@ -273,26 +346,68 @@ class SharedObsUnityGymWrapper(Env):
 
             reward_ = rewards[self.agent] - rewards[self.agent_other]
             bonus_reward = 0
+
             # print("Ball: ", self._get_ball_side(self.ball_coords, obs))
             if self._get_ball_side(self.ball_coords, obs)==self.agent: 
                 if self.ball_touched:
-                    bonus_reward += 0.05
-                elif not self.ball_touched:
-                    bonus_reward -= 0.04
+                    bonus_reward += 0.08
+                # elif not self.ball_touched:
+                #     bonus_reward -= 0.001
             elif self._get_ball_side(self.ball_coords, obs)==self.agent_other: 
                 if self.ball_touched:
                     bonus_reward -= 0.03
                 elif not self.ball_touched:
                     bonus_reward += 0.02
 
+            # ---------------- potential-based shaping ------------------------
+            ball_x, court_w = self.ball_coords[1], obs.shape[1]
+            potential_now   = ball_x / court_w                     # Φ(s′)
+            delta_pot       = potential_now - self.prev_potential  # Φ(s′) − Φ(s)
+            shaping_bonus   = self.shaping_lambda * delta_pot
+
+            if gamestate == 1: 
+                self.is_serving = False
+            elif gamestate == 2:
+                self.is_serving = True
+
+            if self.is_serving: 
+                bonus_reward += shaping_bonus  
+
+            self.prev_potential = potential_now
+
+            if self.step_count % self.anneal_every == 0:
+                self.shaping_lambda *= self.anneal_factor
+            # ---------------------------------------------------------------
+            
+            
+            if gamestate == 1: # Left agent serve
+                self.opponent_type = "attack"
+            elif gamestate == 2: # Right agent serve
+                self.opponent_type = "defend"
+            elif gamestate == 3: # Left agent violated 5-second rule
+                bonus_reward = 0
+                reward_ = 0
+            # elif gamestate == 4: # Right agent violated 5-second rule
+            #     bonus_reward -=0.2
+            elif gamestate == 5: # Left agent scored a point
+                bonus_reward -=0.02
+
             done = False
             if (rewards[self.agent] + rewards[self.agent_other]) > 0:
                 done = True
-                self._select_opponent()
+                print("Against opponent: ", self.opponent_policy)
+                print("Gamestate: ", [gamestate])
                 print ("Rewards: ", rewards[self.agent], rewards[self.agent_other], reward_ + bonus_reward)
                 print("Action:", action)
+                self._select_opponent()
 
-            return stacked_obs, reward_ + bonus_reward, done, False, infos[self.agent]
+            total_reward = np.clip(reward_ + bonus_reward, -2, 2)
+
+            unmasked_obs = self._ori_preprocess(obs_dict[self.agent_obs]['observation'][0])
+            infos[self.agent]["unmasked_obs"] = unmasked_obs
+
+            return stacked_obs, total_reward, done, False, infos[self.agent]
+        
         except Exception as e:
             print(f"Error in step: {e}")
             traceback.print_exc()
